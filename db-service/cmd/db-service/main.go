@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
 
@@ -17,6 +18,11 @@ func main() {
 		log.Fatalf("1failed to connect to database: %v", err)
 		return
 	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "redkaPass",
+	})
 
 	err = db.Ping()
 	if err != nil {
@@ -30,7 +36,7 @@ func main() {
 
 	server := grpc.NewServer()
 
-	messagepb.RegisterTaskServiceServer(server, taskmanager.NewTaskManager(db))
+	messagepb.RegisterTaskServiceServer(server, taskmanager.NewTaskManager(db, rdb))
 
 	log.Println("gRPC server listening on :8081")
 	if err := server.Serve(lis); err != nil {

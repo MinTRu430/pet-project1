@@ -4,20 +4,26 @@ import (
 	"context"
 	"database/sql"
 	pb "db-service/api/proto"
+	"encoding/json"
 	"fmt"
 	"log"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	_ "github.com/lib/pq"
 )
 
 type TaskManager struct {
 	pb.UnimplementedTaskServiceServer
-	db *sql.DB
+	db          *sql.DB
+	redisClient *redis.Client
 }
 
-func NewTaskManager(db *sql.DB) *TaskManager {
+func NewTaskManager(db *sql.DB, redisClient *redis.Client) *TaskManager {
 	return &TaskManager{
-		db: db,
+		db:          db,
+		redisClient: redisClient,
 	}
 }
 
@@ -32,10 +38,23 @@ func (tm *TaskManager) Create(ctx context.Context, in *pb.CreateTask) (*pb.Nothi
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("insert into tasks insert error %s", err)
 	}
 
+	_ = tm.redisClient.Del(ctx, "task_list").Err()
+
 	return &pb.Nothing{Dummy: false}, nil
 }
 
 func (tm *TaskManager) List(ctx context.Context, in *pb.TaskID) (*pb.TaskList, error) {
+	cacheKey := "task_list"
+
+	val, err := tm.redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		var cachedTasks pb.TaskList
+		if jsonErr := json.Unmarshal([]byte(val), &cachedTasks); jsonErr == nil {
+			log.Println("get form Redis")
+			return &cachedTasks, nil
+		}
+	}
+
 	rows, err := tm.db.Query("SELECT id, header, body, isdone FROM tasks")
 	if err != nil {
 		return nil, err
@@ -52,9 +71,16 @@ func (tm *TaskManager) List(ctx context.Context, in *pb.TaskID) (*pb.TaskList, e
 		tasks = append(tasks, &t)
 	}
 
-	return &pb.TaskList{
-		Tasks: tasks,
-	}, nil
+	result := &pb.TaskList{Tasks: tasks}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("can't marshal List, %v", err)
+	}
+	redisStatus := tm.redisClient.Set(ctx, cacheKey, data, 1*time.Minute)
+	log.Printf("redisStatusFullName %v", redisStatus.FullName())
+
+	return result, nil
 }
 func (tm *TaskManager) Delete(ctx context.Context, in *pb.TaskID) (*pb.Nothing, error) {
 	if in.ID == "" {
@@ -66,6 +92,8 @@ func (tm *TaskManager) Delete(ctx context.Context, in *pb.TaskID) (*pb.Nothing, 
 		log.Printf("delete %s\n", err)
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("delete error %s", err)
 	}
+
+	_ = tm.redisClient.Del(ctx, "task_list").Err()
 
 	return &pb.Nothing{Dummy: false}, nil
 }
@@ -79,6 +107,8 @@ func (tm *TaskManager) Done(ctx context.Context, in *pb.TaskID) (*pb.Nothing, er
 		log.Printf("update %s\n", err)
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("update error %s", err)
 	}
+
+	_ = tm.redisClient.Del(ctx, "task_list").Err()
 
 	return &pb.Nothing{Dummy: false}, nil
 }
