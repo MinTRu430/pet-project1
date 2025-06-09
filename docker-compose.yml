@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: postgres-container
+    environment:
+      POSTGRES_USER: dude
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: tasksdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - './_postgres/:/docker-entrypoint-initdb.d/'
+
+volumes:
+  pgdata:
