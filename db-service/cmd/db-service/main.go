@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	messagepb "db-service/api/proto"
+	"db-service/internal/pkg/logger"
 	"db-service/internal/taskmanager"
 	"log"
 	"net"
@@ -34,9 +35,12 @@ func main() {
 		log.Fatalln("cant listen port", err)
 	}
 
+	logger := logger.NewKafkaLogger("db-service")
+	logger.Info().Msg("start-logging db-service!!!")
+
 	server := grpc.NewServer()
 
-	messagepb.RegisterTaskServiceServer(server, taskmanager.NewTaskManager(db, rdb))
+	messagepb.RegisterTaskServiceServer(server, taskmanager.NewTaskManager(db, rdb, logger))
 
 	log.Println("gRPC server listening on :8081")
 	if err := server.Serve(lis); err != nil {
