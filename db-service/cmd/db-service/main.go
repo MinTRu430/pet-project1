@@ -36,7 +36,8 @@ func main() {
 	}
 
 	logger := logger.NewKafkaLogger("db-service")
-	logger.Info().Msg("start-logging db-service!!!")
+	defer logger.Close()
+	logger.Logger().Info().Msg("start-logging db-service!!!")
 
 	server := grpc.NewServer()
 

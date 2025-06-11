@@ -22,7 +22,20 @@ func (w *kafkaLogWriter) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
-func NewKafkaLogger(serviceName string) zerolog.Logger {
+type KafkaLogger struct {
+	logger zerolog.Logger
+	writer *kafka.Writer
+}
+
+func (l *KafkaLogger) Logger() *zerolog.Logger {
+	return &l.logger
+}
+
+func (l *KafkaLogger) Close() error {
+	return l.writer.Close()
+}
+
+func NewKafkaLogger(serviceName string) *KafkaLogger {
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{"localhost:9092", "localhost:9093", "localhost:9094"},
 		Topic:    "db-logs",
@@ -37,5 +50,8 @@ func NewKafkaLogger(serviceName string) zerolog.Logger {
 
 	logger := zerolog.New(kafkaWriter).With().Timestamp().Str("service", serviceName).Logger()
 
-	return logger
+	return &KafkaLogger{
+		logger: logger,
+		writer: writer,
+	}
 }

@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	pb "db-service/api/proto"
+	"db-service/internal/pkg/logger"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog"
 
 	_ "github.com/lib/pq"
 )
@@ -18,10 +18,10 @@ type TaskManager struct {
 	pb.UnimplementedTaskServiceServer
 	db          *sql.DB
 	redisClient *redis.Client
-	kafkaLogger zerolog.Logger
+	kafkaLogger *logger.KafkaLogger
 }
 
-func NewTaskManager(db *sql.DB, redisClient *redis.Client, logger zerolog.Logger) *TaskManager {
+func NewTaskManager(db *sql.DB, redisClient *redis.Client, logger *logger.KafkaLogger) *TaskManager {
 	return &TaskManager{
 		db:          db,
 		redisClient: redisClient,
@@ -30,48 +30,48 @@ func NewTaskManager(db *sql.DB, redisClient *redis.Client, logger zerolog.Logger
 }
 
 func (tm *TaskManager) Create(ctx context.Context, in *pb.CreateTask) (*pb.Nothing, error) {
-	tm.kafkaLogger.Info().Str("header", in.Header).Str("body", in.Body).Msg("received Create request")
+	tm.kafkaLogger.Logger().Info().Str("header", in.Header).Str("body", in.Body).Msg("received Create request")
 
 	if in.Header == "" && in.Body == "" {
 		return nil, fmt.Errorf("header is nil: %s or body is nil: %s", in.Header, in.Body)
 	}
 
-	tm.kafkaLogger.Info().Msg("query insert into tasks")
+	tm.kafkaLogger.Logger().Info().Msg("query insert into tasks")
 	_, err := tm.db.Exec("INSERT INTO tasks(header, body) VALUES ($1, $2)", in.Header, in.Body)
 	if err != nil {
-		tm.kafkaLogger.Error().Err(err).Msg("insert into tasks insert error")
+		tm.kafkaLogger.Logger().Error().Err(err).Msg("insert into tasks insert error")
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("insert into tasks insert error %s", err)
 	}
 
 	if err := tm.redisClient.Del(ctx, "task_list").Err(); err != nil {
-		tm.kafkaLogger.Warn().Err(err).Msg("failed to delete task_list from Redis")
+		tm.kafkaLogger.Logger().Warn().Err(err).Msg("failed to delete task_list from Redis")
 	} else {
-		tm.kafkaLogger.Info().Msg("deleted task_list from Redis")
+		tm.kafkaLogger.Logger().Info().Msg("deleted task_list from Redis")
 	}
 
-	tm.kafkaLogger.Info().Msg("task successfully inserted into DB")
+	tm.kafkaLogger.Logger().Info().Msg("task successfully inserted into DB")
 	return &pb.Nothing{Dummy: false}, nil
 }
 
 func (tm *TaskManager) List(ctx context.Context, in *pb.TaskID) (*pb.TaskList, error) {
-	tm.kafkaLogger.Info().Msg("received List request")
+	tm.kafkaLogger.Logger().Info().Msg("received List request")
 
 	cacheKey := "task_list"
 
-	tm.kafkaLogger.Info().Msg("attempting to get task_list from Redis cache")
+	tm.kafkaLogger.Logger().Info().Msg("attempting to get task_list from Redis cache")
 	val, err := tm.redisClient.Get(ctx, cacheKey).Result()
 	if err == nil {
 		var cachedTasks pb.TaskList
 		if jsonErr := json.Unmarshal([]byte(val), &cachedTasks); jsonErr == nil {
-			tm.kafkaLogger.Info().Msg("get TaskList from Redis cache")
+			tm.kafkaLogger.Logger().Info().Msg("get TaskList from Redis cache")
 			return &cachedTasks, nil
 		}
 	}
 
-	tm.kafkaLogger.Info().Msg("query select from tasks")
+	tm.kafkaLogger.Logger().Info().Msg("query select from tasks")
 	rows, err := tm.db.Query("SELECT id, header, body, isdone FROM tasks")
 	if err != nil {
-		tm.kafkaLogger.Error().Err(err).Msg("select from tasks error")
+		tm.kafkaLogger.Logger().Error().Err(err).Msg("select from tasks error")
 
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (tm *TaskManager) List(ctx context.Context, in *pb.TaskID) (*pb.TaskList, e
 		var t pb.Task
 		err := rows.Scan(&t.ID, &t.Header, &t.Body, &t.IsDone)
 		if err != nil {
-			tm.kafkaLogger.Error().Err(err).Msg("rows scan error")
+			tm.kafkaLogger.Logger().Error().Err(err).Msg("rows scan error")
 			return nil, err
 		}
 		tasks = append(tasks, &t)
@@ -92,57 +92,57 @@ func (tm *TaskManager) List(ctx context.Context, in *pb.TaskID) (*pb.TaskList, e
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		tm.kafkaLogger.Error().Err(err).Msg("can't marshal List")
+		tm.kafkaLogger.Logger().Error().Err(err).Msg("can't marshal List")
 		return nil, fmt.Errorf("can't marshal List, %v", err)
 	}
 
 	tm.redisClient.Set(ctx, cacheKey, data, 1*time.Minute)
-	tm.kafkaLogger.Info().Msg("cached task_list to Redis for 1 minute")
+	tm.kafkaLogger.Logger().Info().Msg("cached task_list to Redis for 1 minute")
 
 	return result, nil
 }
 func (tm *TaskManager) Delete(ctx context.Context, in *pb.TaskID) (*pb.Nothing, error) {
-	tm.kafkaLogger.Info().Str("id", in.ID).Msg("received Delete request")
+	tm.kafkaLogger.Logger().Info().Str("id", in.ID).Msg("received Delete request")
 	if in.ID == "" {
-		tm.kafkaLogger.Warn().Msg("empty ID provided in Delete")
+		tm.kafkaLogger.Logger().Warn().Msg("empty ID provided in Delete")
 		return nil, fmt.Errorf("id is empty %s", in.ID)
 	}
 
-	tm.kafkaLogger.Info().Str("id", in.ID).Msg("executing delete from DB")
+	tm.kafkaLogger.Logger().Info().Str("id", in.ID).Msg("executing delete from DB")
 	_, err := tm.db.Exec("DELETE FROM tasks WHERE id = $1;", in.ID)
 	if err != nil {
-		tm.kafkaLogger.Error().Err(err).Str("id", in.ID).Msg("failed to delete task")
+		tm.kafkaLogger.Logger().Error().Err(err).Str("id", in.ID).Msg("failed to delete task")
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("delete error %s", err)
 	}
 
 	if err := tm.redisClient.Del(ctx, "task_list").Err(); err != nil {
-		tm.kafkaLogger.Warn().Err(err).Msg("failed to delete task_list from Redis")
+		tm.kafkaLogger.Logger().Warn().Err(err).Msg("failed to delete task_list from Redis")
 	} else {
-		tm.kafkaLogger.Info().Msg("deleted task_list from Redis")
+		tm.kafkaLogger.Logger().Info().Msg("deleted task_list from Redis")
 	}
 
 	return &pb.Nothing{Dummy: false}, nil
 }
 func (tm *TaskManager) Done(ctx context.Context, in *pb.TaskID) (*pb.Nothing, error) {
-	tm.kafkaLogger.Info().Str("id", in.ID).Msg("received Done request")
+	tm.kafkaLogger.Logger().Info().Str("id", in.ID).Msg("received Done request")
 
 	if in.ID == "" {
-		tm.kafkaLogger.Warn().Msg("empty ID provided in Done")
+		tm.kafkaLogger.Logger().Warn().Msg("empty ID provided in Done")
 		return nil, fmt.Errorf("id is empty %s", in.ID)
 	}
 
-	tm.kafkaLogger.Info().Str("id", in.ID).Msg("marking task as done")
+	tm.kafkaLogger.Logger().Info().Str("id", in.ID).Msg("marking task as done")
 	_, err := tm.db.Exec("UPDATE tasks SET isdone = true WHERE id = $1;", in.ID)
 	if err != nil {
-		tm.kafkaLogger.Error().Err(err).Str("id", in.ID).Msg("failed to mark task as done")
+		tm.kafkaLogger.Logger().Error().Err(err).Str("id", in.ID).Msg("failed to mark task as done")
 		return &pb.Nothing{Dummy: false}, fmt.Errorf("update error %s", err)
 	}
 
-	tm.kafkaLogger.Info().Str("id", in.ID).Msg("task successfully marked as done")
+	tm.kafkaLogger.Logger().Info().Str("id", in.ID).Msg("task successfully marked as done")
 	if err := tm.redisClient.Del(ctx, "task_list").Err(); err != nil {
-		tm.kafkaLogger.Warn().Err(err).Msg("failed to delete task_list from Redis")
+		tm.kafkaLogger.Logger().Warn().Err(err).Msg("failed to delete task_list from Redis")
 	} else {
-		tm.kafkaLogger.Info().Msg("deleted task_list from Redis")
+		tm.kafkaLogger.Logger().Info().Msg("deleted task_list from Redis")
 	}
 
 	return &pb.Nothing{Dummy: false}, nil
