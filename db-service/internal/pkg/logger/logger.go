@@ -39,7 +39,7 @@ func NewKafkaLogger(serviceName string) *KafkaLogger {
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{"localhost:9092", "localhost:9093", "localhost:9094"},
 		Topic:    "db-logs",
-		Balancer: &kafka.Hash{},
+		Balancer: &kafka.RoundRobin{},
 		Async:    true,
 	})
 
